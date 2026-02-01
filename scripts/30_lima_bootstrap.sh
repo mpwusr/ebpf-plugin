@@ -11,6 +11,7 @@ sudo apt-get install -y \
   clang llvm make \
   iproute2 \
   golang-go \
+  libbpf-dev \
   "linux-headers-$(uname -r)" || true
 
 sudo apt-get install -y \
