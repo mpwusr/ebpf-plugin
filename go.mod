@@ -1,6 +1,6 @@
 module ebpf-plugin
 
-go 1.23
+go 1.22
 
 require (
 	github.com/cilium/ebpf v0.17.1

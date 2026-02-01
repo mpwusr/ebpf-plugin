@@ -13,6 +13,11 @@ sudo apt-get install -y \
   golang-go \
   "linux-headers-$(uname -r)" || true
 
+sudo apt-get install -y \
+  build-essential \
+  linux-libc-dev \
+  libc6-dev
+
 # Install bpftool provider (Ubuntu: linux-tools-$(uname -r))
 # Some images don't ship exact kernel tools packages, so we fallback to linux-tools-generic.
 if ! command -v bpftool >/dev/null 2>&1; then
