@@ -6,7 +6,9 @@ VM_REPO_DIR="${VM_REPO_DIR:-\$HOME/ebpf-plugin}"
 
 limactl shell "$VM_NAME" -- bash -lc "
   set -euo pipefail
+  export GOTOOLCHAIN=local
   cd $VM_REPO_DIR
+  go version
   go mod tidy
   go build ./...
   go test ./... || true

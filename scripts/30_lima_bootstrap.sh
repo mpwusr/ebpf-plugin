@@ -36,5 +36,5 @@ echo "  clang:   $(clang --version | head -n1)"
 echo "  go:      $(go version)"
 echo "  tc:      $(tc -V 2>&1 || true)"
 echo "  bpftool: $(bpftool version 2>&1 || true)"
-echo "  bpffs:   $(mount | grep -E \" /sys/fs/bpf \" || true)"
+echo "  bpffs:   $(mount | grep -E ' /sys/fs/bpf ' || echo 'not mounted')"
 
