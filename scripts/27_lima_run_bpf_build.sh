@@ -2,7 +2,7 @@
 set -euo pipefail
 
 VM_NAME="${VM_NAME:-ebpf-dev}"
-VM_REPO_DIR="${VM_REPO_DIR:-$HOME/ebpf-plugin}"
+VM_REPO_DIR="${VM_REPO_DIR:-/home/michaelwilliams.linux/ebpf-plugin}"
 
 # VM-side settings
 IFACE="${IFACE:-eth0}"
