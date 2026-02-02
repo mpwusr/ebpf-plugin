@@ -14,26 +14,19 @@ The design mirrors how real systems like **Cilium**, **Calico eBPF**, and **mode
 
 ## Architecture Overview
 
-+--------------------+
-| User Space         |
-|                    |
-| tc_loader (C)      |
-| - loads BPF obj    |
-| - creates map      |
-| - attaches TC      |
-| - pins map         |
-+----------+---------+
-|
-| libbpf (syscalls)
-v
-+--------------------+
-| Kernel Space       |
-|                    |
-| tc_counter.o       |
-| - tc/ingress prog  |
-| - tc/egress prog   |
-| - shared map       |
-+--------------------+
+```mermaid
+flowchart TB
+    subgraph UserSpace["User Space"]
+        L[tc_loader C<br/>- loads BPF obj<br/>- creates map<br/>- attaches TC<br/>- pins map]
+    end
+
+    subgraph KernelSpace["Kernel Space"]
+        K[tc_counter.o<br/>- tc/ingress prog<br/>- tc/egress prog<br/>- shared map]
+    end
+
+    L -->|libbpf syscalls| K
+```
+
 ### Key Properties
 
 - **One BPF object load**
@@ -46,23 +39,24 @@ v
 
 ## Repository Layout
 
+```
 .
 ├── bpf/
-│ ├── tc_counter.c # Kernel eBPF programs (ingress + egress)
-│ ├── vmlinux.h # Kernel BTF-derived types (generated in VM)
-│ └── Makefile # Builds tc_counter.o
+│   ├── tc_counter.c    # Kernel eBPF programs (ingress + egress)
+│   ├── vmlinux.h       # Kernel BTF-derived types (generated in VM)
+│   └── Makefile        # Builds tc_counter.o
 │
 ├── loader/
-│ ├── tc_loader.c # User-space loader (libbpf)
-│ └── Makefile # Builds tc_loader binary
+│   ├── tc_loader.c     # User-space loader (libbpf)
+│   └── Makefile        # Builds tc_loader binary
 │
 ├── scripts/
-│ ├── 10_lima_create.sh
-│ ├── 25_lima_run_bootstrap.sh
-│ └── 27_lima_run_bpf_build.sh
+│   ├── 10_lima_create.sh
+│   ├── 25_lima_run_bootstrap.sh
+│   └── 27_lima_run_bpf_build.sh
 │
 └── README.md
-
+```
 
 ---
 
@@ -94,266 +88,163 @@ int tc_egress(struct __sk_buff *skb) {
     return 0;
 }
 ```
-Runs on every packet entering or leaving the interface
 
-Atomically increments counters in the shared map
+- Runs on every packet entering or leaving the interface
+- Atomically increments counters in the shared map
+- Returns `TC_ACT_OK` (allow packet)
 
-Returns TC_ACT_OK (allow packet)
+### Important Design Choice
 
-Important Design Choice
 The map is defined once in the object, not per program.
 
 This ensures:
 
-No duplicated state
+- No duplicated state
+- Correct aggregation
+- Kernel-owned lifetime
 
-Correct aggregation
+---
 
-Kernel-owned lifetime
+## The Loader (`tc_loader.c`)
 
-The Loader (tc_loader.c)
-tc_loader is a user-space control plane, not a dataplane.
+`tc_loader` is a user-space control plane, not a dataplane.
 
-Responsibilities
-Open and load the BPF object
+### Responsibilities
 
-Create maps in kernel
+- Open and load the BPF object
+- Create maps in kernel
+- Attach programs to TC ingress + egress
+- Pin the shared map
+- Hold references to keep programs alive
+- Detach cleanly on exit
 
-Attach programs to TC ingress + egress
+### Critical Detail: One Load, Two Programs
 
-Pin the shared map
-
-Hold references to keep programs alive
-
-Detach cleanly on exit
-
-Critical Detail: One Load, Two Programs
+```c
 obj = bpf_object__open_file(obj_path, &open_opts);
 bpf_object__load(obj);
-Object is loaded once
+```
 
-Both programs (tc_ingress, tc_egress) come from the same object
+- Object is loaded **once**
+- Both programs (`tc_ingress`, `tc_egress`) come from the same object
+- Kernel creates **one instance** of the map
+- This is why the counters increment correctly
 
-Kernel creates one instance of the map
+### Map Pinning
 
-This is why the counters increment correctly.
-
-Map Pinning
 The loader pins the map here:
 
+```
 /sys/fs/bpf/ebpf-plugin/counter
+```
+
 This allows:
 
+```bash
 bpftool map dump pinned /sys/fs/bpf/ebpf-plugin/counter
+```
+
 Pinned maps survive:
 
-Program reloads
-
-Loader restarts (if not unlinked)
+- Program reloads
+- Loader restarts (if not unlinked)
 
 This is exactly how production systems expose dataplane state.
 
-Why Not tc filter add bpf ... Directly?
-Attaching via tc CLI:
+---
 
-Loads the object twice
+## Why Not `tc filter add bpf ...` Directly?
 
-Creates two maps
+Attaching via `tc` CLI:
 
-Breaks shared state
+- Loads the object **twice**
+- Creates **two maps**
+- Breaks shared state
 
 This repo intentionally avoids that anti-pattern.
 
-Development Environment (macOS)
+---
+
+## Development Environment (macOS)
+
 Because macOS cannot run eBPF natively, this repo uses Lima.
 
-One-Command Bring-Up
+### One-Command Bring-Up
+
+```bash
 ./scripts/10_lima_create.sh
 ./scripts/25_lima_run_bootstrap.sh
 ./scripts/27_lima_run_bpf_build.sh
-What this does:
+```
 
-Creates a Linux VM
+### What this does:
 
-Installs kernel headers, bpftool, libbpf
+- Creates a Linux VM
+- Installs kernel headers, `bpftool`, `libbpf`
+- Builds eBPF + loader
+- Attaches ingress + egress
+- Pins the shared map
+- Generates traffic
+- Shows counters incrementing
 
-Builds eBPF + loader
+### Example Output
 
-Attaches ingress + egress
-
-Pins the shared map
-
-Generates traffic
-
-Shows counters incrementing
-
-Example Output
+```json
 [map] pinned counter map (after traffic):
 [
   { "key": 0, "value": 40 },
   { "key": 1, "value": 40 }
 ]
+```
+
 Ingress and egress counters increase independently — from the same map.
-
-How This Maps to Real Systems
-Concept here	Production equivalent
-tc_counter.c	Cilium / Calico dataplane
-tc_loader.c	Agent / Daemon
-pinned map	Metrics / policy state
-TC hook	L2/L3 enforcement
-shared map	Connection / packet state
-When to Use This Pattern
-Use this design when you need:
-
-Shared state across multiple hooks
-
-Deterministic attach/detach
-
-Observability without rebuilding
-
-Clean ownership semantics
-
-Compatibility with systemd / Kubernetes agents
-
-Next Steps
-Possible extensions:
-
-Per-CPU maps
-
-Hash maps keyed by tuple
-
-XDP + TC hybrid
-
-Go loader (libbpfgo)
-
-Netlink-driven interface discovery
-
-Prometheus exporter reading pinned maps
-
-License
-GPL (kernel requirement)
-
-Author
-Michael Williams
-Platform Engineering · Kubernetes · eBPF · Systems Architecture
-
 
 ---
 
-If you want, next we can:
+## How This Maps to Real Systems
 
-- Add **ASCII lifecycle diagrams**
-- Add a **“Why this is correct” section vs naive approaches**
-- Add a **Go loader version**
-- Turn this into a **talk / interview demo** (Cisco Isovalent-style)
+| Concept here | Production equivalent |
+|--------------|----------------------|
+| `tc_counter.c` | Cilium / Calico dataplane |
+| `tc_loader.c` | Agent / Daemon |
+| pinned map | Metrics / policy state |
+| TC hook | L2/L3 enforcement |
+| shared map | Connection / packet state |
 
-Just say the word.
-You said:
-is this mermaid +--------------------+
-| User Space |
-| |
-| tc_loader (C) |
-| - loads BPF obj |
-| - creates map |
-| - attaches TC |
-| - pins map |
-+----------+---------+
-|
-| libbpf (syscalls)
-v
-+--------------------+
-| Kernel Space |
-| |
-| tc_counter.o |
-| - tc/ingress prog |
-| - tc/egress prog |
-| - shared map |
-+--------------------+
-ChatGPT said:
-Short answer: no — what you pasted is not Mermaid, it’s just an ASCII diagram 🙂
+---
 
-Mermaid is a specific diagram DSL that tools like GitHub, Markdown renderers, and docs engines understand.
+## When to Use This Pattern
 
-Your diagram (ASCII)
-What you wrote is perfectly fine as plain text, but Mermaid won’t parse it:
+Use this design when you need:
 
-+--------------------+
-| User Space         |
-|                    |
-| tc_loader (C)      |
-| - loads BPF obj    |
-| - creates map      |
-| - attaches TC      |
-| - pins map         |
-+----------+---------+
-           |
-           | libbpf (syscalls)
-           v
-+--------------------+
-| Kernel Space       |
-|                    |
-| tc_counter.o       |
-| - tc/ingress prog  |
-| - tc/egress prog   |
-| - shared map       |
-+--------------------+
-✅ Equivalent Mermaid diagram
-Here is the correct Mermaid version of that exact diagram:
+- Shared state across multiple hooks
+- Deterministic attach/detach
+- Observability without rebuilding
+- Clean ownership semantics
+- Compatibility with systemd / Kubernetes agents
 
-flowchart TB
-    subgraph UserSpace["User Space"]
-        L[tc_loader (C)\n- loads BPF obj\n- creates map\n- attaches TC\n- pins map]
-    end
+---
 
-    subgraph KernelSpace["Kernel Space"]
-        K[tc_counter.o\n- tc/ingress prog\n- tc/egress prog\n- shared map]
-    end
+## Next Steps
 
-    L -->|libbpf syscalls| K
-This will render properly in:
+Possible extensions:
 
-GitHub README.md
+- Per-CPU maps
+- Hash maps keyed by tuple
+- XDP + TC hybrid
+- Go loader (`libbpfgo`)
+- Netlink-driven interface discovery
+- Prometheus exporter reading pinned maps
 
-GitLab
+---
 
-MkDocs
+## License
 
-Obsidian
+GPL (kernel requirement)
 
-Many Markdown viewers
+---
 
-Why Mermaid is better here
-Mermaid gives you:
+## Author
 
-Structured semantics (User space vs Kernel space)
-
-Clickable / extensible diagrams
-
-Version-control friendly
-
-Easy expansion later:
-
-Add XDP
-
-Add pinned maps
-
-Add multiple interfaces
-
-Bonus: Slightly more “systems-style” Mermaid
-If you want it to look more like a kernel architecture diagram:
-
-flowchart LR
-    subgraph U["User Space"]
-        Loader[tc_loader\n(libbbpf)]
-    end
-
-    subgraph K["Kernel Space"]
-        Map[(Shared BPF Map)]
-        Ingress[tc/ingress]
-        Egress[tc/egress]
-    end
-
-    Loader -->|load| Ingress
-    Loader -->|load| Egress
-    Ingress --> Map
-    Egress --> Map
+**Michael Williams**  
+Platform Engineering · Kubernetes · eBPF · Systems Architecture
