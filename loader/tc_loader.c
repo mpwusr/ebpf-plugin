@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/stat.h>
 
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
@@ -27,14 +28,14 @@ static void die(const char *msg) {
   exit(1);
 }
 
-static int libbpf_print_fn(enum libbpf_print_level level, const char *format, va_list args) {
-  // quiet by default; set LIBBPF_DEBUG=1 to see warnings/info
-  const char *dbg = getenv("LIBBPF_DEBUG");
-  if (!dbg || strcmp(dbg, "1") != 0) {
-    if (level == LIBBPF_WARN || level == LIBBPF_INFO)
-      return;
-  }
-  vfprintf(stderr, format, args);
+static int libbpf_print_fn(enum libbpf_print_level level,
+                           const char *format, va_list args)
+{
+    /* Silence debug noise if you want */
+    if (level == LIBBPF_DEBUG)
+        return 0;
+
+    return vfprintf(stderr, format, args);
 }
 
 static int ensure_dir(const char *path) {
