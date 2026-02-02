@@ -107,7 +107,10 @@ int main(int argc, char **argv) {
 
   libbpf_set_print(libbpf_print_fn);
 
-  struct bpf_object_open_opts open_opts = {};
+  struct bpf_object_open_opts open_opts = {
+      .sz = sizeof(struct bpf_object_open_opts),
+  };
+
   struct bpf_object *obj = bpf_object__open_file(obj_path, &open_opts);
   if (!obj) die("bpf_object__open_file");
 
