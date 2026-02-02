@@ -8,17 +8,22 @@ VM_REPO_DIR="${VM_REPO_DIR:-$HOME/ebpf-plugin}"
 IFACE="${IFACE:-eth0}"
 PIN_DIR="${PIN_DIR:-/sys/fs/bpf/ebpf-plugin}"
 PIN_MAP="${PIN_MAP:-$PIN_DIR/counter}"
-BPF_OBJ_REL="${BPF_OBJ_REL:-bpf/tc_counter.o}"      # relative to repo root inside VM
-LOADER_BIN_REL="${LOADER_BIN_REL:-loader/tc_loader}" # relative to repo root inside VM
+BPF_OBJ_REL="${BPF_OBJ_REL:-bpf/tc_counter.o}"          # relative to repo root inside VM
+LOADER_BIN_REL="${LOADER_BIN_REL:-loader/tc_loader}"    # relative to repo root inside VM
 
 limactl shell "$VM_NAME" -- bash -lc "
   set -euo pipefail
   export GOTOOLCHAIN=local
 
+  # compute loader filename inside the VM (avoid zsh/bad substitution)
+  LOADER_BIN=\"$VM_REPO_DIR/$LOADER_BIN_REL\"
+  LOADER_NAME=\$(basename \"\$LOADER_BIN\")
+
   echo '[vm] repo dir: $VM_REPO_DIR'
   echo '[vm] iface:    $IFACE'
   echo '[vm] pin dir:  $PIN_DIR'
   echo '[vm] pin map:  $PIN_MAP'
+  echo '[vm] loader:   '\$LOADER_BIN
 
   #
   # 1) Build eBPF object in bpf/
@@ -29,8 +34,6 @@ limactl shell "$VM_NAME" -- bash -lc "
   echo '[bpf] files:'
   ls -la
 
-  # Generate kernel-specific vmlinux.h inside the VM
-  # (You can keep the file, but regenerate if you want by deleting it)
   if [ ! -f vmlinux.h ]; then
     echo '[bpf] Generating vmlinux.h from /sys/kernel/btf/vmlinux'
     bpftool btf dump file /sys/kernel/btf/vmlinux format c > vmlinux.h
@@ -58,16 +61,16 @@ limactl shell "$VM_NAME" -- bash -lc "
   make clean || true
   make
 
-  if [ ! -x ./${LOADER_BIN_REL##*/} ]; then
-    echo '[loader] ERROR: expected loader binary not found/executable: ./${LOADER_BIN_REL##*/}'
+  if [ ! -x \"\$LOADER_BIN\" ]; then
+    echo \"[loader] ERROR: expected loader binary not found/executable: \$LOADER_BIN\"
     echo '[loader] Hint: ensure loader/Makefile outputs tc_loader'
     exit 1
   fi
 
   echo
   echo '[loader] built binary:'
-  ls -la ./${LOADER_BIN_REL##*/}
-  file ./${LOADER_BIN_REL##*/} || true
+  ls -la \"\$LOADER_BIN\"
+  file \"\$LOADER_BIN\" || true
 
   #
   # 3) Hard reset old attachments + pinned map (idempotent)
@@ -83,12 +86,10 @@ limactl shell "$VM_NAME" -- bash -lc "
   #
   echo
   echo '[tc] running loader (shared map path)'
-  sudo IFACE=\"$IFACE\" \\
-       PIN_DIR=\"$PIN_DIR\" \\
-       BPF_OBJ=\"$VM_REPO_DIR/$BPF_OBJ_REL\" \\
-       ./${
-         LOADER_BIN_REL##*/
-       } \\
+  sudo IFACE=\"$IFACE\" \
+       PIN_DIR=\"$PIN_DIR\" \
+       BPF_OBJ=\"$VM_REPO_DIR/$BPF_OBJ_REL\" \
+       \"\$LOADER_BIN\" \
        >/tmp/tc_loader.log 2>&1 &
 
   LOADER_PID=\$!
@@ -111,9 +112,6 @@ limactl shell "$VM_NAME" -- bash -lc "
   sudo bpftool map show pinned \"$PIN_MAP\" || true
   sudo bpftool map dump pinned \"$PIN_MAP\" || true
 
-  #
-  # 5) Generate traffic and show increments
-  #
   echo
   echo '[traffic] generating traffic...'
   ping -c 5 1.1.1.1 >/dev/null 2>&1 || true
@@ -123,20 +121,8 @@ limactl shell "$VM_NAME" -- bash -lc "
   echo '[map] pinned counter map (after traffic):'
   sudo bpftool map dump pinned \"$PIN_MAP\" || true
 
-  #
-  # 6) Leave loader running by default (so attachments stay alive)
-  #    If you want the script to stop it automatically, uncomment kill block below.
-  #
   echo
   echo \"[tc] loader is running in background (pid=\$LOADER_PID).\"
   echo \"[tc] To stop + detach: sudo kill -INT \$LOADER_PID\"
   echo \"[tc] Log: /tmp/tc_loader.log\"
-
-  # Uncomment if you want auto-detach at end of script:
-  # echo '[tc] stopping loader (auto-detach)'
-  # sudo kill -INT \$LOADER_PID || true
-  # sleep 1
-  # echo '[tc] after detach:'
-  # sudo tc filter show dev \"$IFACE\" ingress || true
-  # sudo tc filter show dev \"$IFACE\" egress || true
 "
