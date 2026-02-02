@@ -10,9 +10,6 @@
 
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
-#include <bpf/bpf_endian.h>
-#include <bpf/bpf_helpers.h>
-#include <bpf/btf.h>
 
 #ifndef BPF_TC_F_REPLACE
 #define BPF_TC_F_REPLACE (1U << 0)
@@ -30,7 +27,7 @@ static void die(const char *msg) {
   exit(1);
 }
 
-static void libbpf_print_fn(enum libbpf_print_level level, const char *format, va_list args) {
+static int libbpf_print_fn(enum libbpf_print_level level, const char *format, va_list args) {
   // quiet by default; set LIBBPF_DEBUG=1 to see warnings/info
   const char *dbg = getenv("LIBBPF_DEBUG");
   if (!dbg || strcmp(dbg, "1") != 0) {
@@ -91,6 +88,8 @@ static int detach_tc(int ifindex, enum bpf_tc_attach_point ap, __u32 handle, __u
 }
 
 int main(int argc, char **argv) {
+  (void)argc;
+  (void)argv;
   const char *iface = getenv("IFACE");
   const char *obj_path = getenv("BPF_OBJ");
   const char *pin_dir = getenv("PIN_DIR");
